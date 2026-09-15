@@ -5,6 +5,8 @@ package io.airbyte.integrations.source.postgres.cdc
 
 import io.airbyte.integrations.source.postgres.operations.types.DateTimeConverter
 import io.debezium.connector.postgresql.PostgresValueConverter
+import io.debezium.connector.postgresql.UnchangedToastedReplicationMessageColumn
+import io.debezium.relational.RelationalDatabaseConnectorConfig
 import io.debezium.spi.converter.CustomConverter
 import io.debezium.spi.converter.RelationalColumn
 import io.debezium.time.Conversions
@@ -202,6 +204,10 @@ class PostgresCustomConverter : CustomConverter<SchemaBuilder?, RelationalColumn
                                 defaultValue as ByteArray,
                             )
                 }
+                if (UnchangedToastedReplicationMessageColumn.isUnchangedToastedValue(x)) {
+                    // Debezium's own hex-mode bytea conversion also yields the string placeholder.
+                    return@Converter UNAVAILABLE_VALUE_PLACEHOLDER
+                }
                 "\\x" + encodeHexString(x as ByteArray)
             },
         )
@@ -222,6 +228,9 @@ class PostgresCustomConverter : CustomConverter<SchemaBuilder?, RelationalColumn
                             defaultValue,
                         )
                 }
+                if (UnchangedToastedReplicationMessageColumn.isUnchangedToastedValue(x)) {
+                    return@Converter UNAVAILABLE_VALUE_PLACEHOLDER
+                }
                 getTextConvertedValue(x)
             },
         )
@@ -240,8 +249,36 @@ class PostgresCustomConverter : CustomConverter<SchemaBuilder?, RelationalColumn
             val defaultValue: Any? = convertDefaultValue(field)
             return if (defaultValue == null) null else getArrayConvertedValue(field, defaultValue)
         }
+        if (UnchangedToastedReplicationMessageColumn.isUnchangedToastedValue(x)) {
+            return unchangedToastedArrayPlaceholder(field)
+        }
         return getArrayConvertedValue(field, x)
     }
+
+    /**
+     * The array schemas registered by [registerArray] with string elements can carry the
+     * placeholder the same way Debezium does for text arrays. Numeric and boolean element schemas
+     * cannot hold a string, so those columns are emitted as null with a warning rather than failing
+     * the sync with a ClassCastException.
+     */
+    private fun unchangedToastedArrayPlaceholder(field: RelationalColumn): Any? =
+        when (field.typeName().uppercase(Locale.getDefault())) {
+            "_NAME",
+            "_DATE",
+            "_TIME",
+            "_TIMESTAMP",
+            "_TIMESTAMPTZ",
+            "_TIMETZ",
+            "_BYTEA" -> listOf(UNAVAILABLE_VALUE_PLACEHOLDER)
+            else -> {
+                log.warn {
+                    "Column '${field.name()}' of type ${field.typeName()} was not changed by the " +
+                        "UPDATE and its TOAST-ed value is absent from the WAL; emitting null. " +
+                        "Set REPLICA IDENTITY FULL or the reselect_columns option to capture it."
+                }
+                null
+            }
+        }
 
     private fun getArrayConvertedValue(field: RelationalColumn, x: Any): Any {
         val fieldType = field.typeName().uppercase(Locale.getDefault())
@@ -643,3 +680,16 @@ class PostgresCustomConverter : CustomConverter<SchemaBuilder?, RelationalColumn
             )
     }
 }
+
+/**
+ * Debezium's `unavailable.value.placeholder`, which this connector never overrides.
+ *
+ * Postgres omits an unchanged TOAST-ed column from the WAL of an UPDATE unless the table's replica
+ * identity is FULL. Debezium represents that as [UnchangedToastedReplicationMessageColumn]'s
+ * sentinel objects and its own value converters turn them into this placeholder. A custom converter
+ * that claims the column type must do the same: otherwise the sentinel's `toString()`
+ * ("java.lang.Object@...") leaks into records, and placeholder-aware tooling such as the
+ * `ReselectColumnsPostProcessor` can no longer recognize the value as unavailable.
+ */
+internal val UNAVAILABLE_VALUE_PLACEHOLDER: String =
+    RelationalDatabaseConnectorConfig.UNAVAILABLE_VALUE_PLACEHOLDER.defaultValueAsString()

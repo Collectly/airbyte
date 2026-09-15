@@ -487,6 +487,15 @@ class CdcReplicationMethodConfigurationSpecification : IncrementalConfigurationS
     @JsonSchemaDefault("")
     @JsonSchemaInject(json = """{"order":5}""")
     var heartbeatActionQuery: String? = ""
+
+    @JsonProperty("reselect_columns")
+    @JsonSchemaTitle("Columns to re-select for unchanged TOAST values (Advanced)")
+    @JsonPropertyDescription(
+        "Comma-separated list of columns in the format <code>schema.table:column</code> whose values the connector re-reads from the source database when Postgres omits them from the WAL. Postgres does not include unchanged <a href=\"https://www.postgresql.org/docs/current/storage-toast.html\">TOAST</a>-ed values (large text, jsonb, bytea, arrays) in UPDATE events unless the table's replica identity is FULL; without this option such columns arrive as the placeholder <code>__debezium_unavailable_value</code>. When set, the connector performs one primary-key lookup per affected event using Debezium's <a href=\"https://debezium.io/documentation/reference/stable/post-processors/reselect-columns.html\">Reselect Columns post processor</a>. Leave empty to disable."
+    )
+    @JsonSchemaDefault("")
+    @JsonSchemaInject(json = """{"order":8}""")
+    var reselectColumns: String? = ""
 }
 
 @ConfigurationProperties("$CONNECTOR_CONFIG_PREFIX.cursor")

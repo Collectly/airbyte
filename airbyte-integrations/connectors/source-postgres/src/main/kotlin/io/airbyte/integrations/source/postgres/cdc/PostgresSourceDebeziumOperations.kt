@@ -45,6 +45,7 @@ import io.airbyte.integrations.source.postgres.operations.types.PostgresDoubleFi
 import io.airbyte.integrations.source.postgres.operations.types.PostgresFloatFieldType
 import io.debezium.connector.postgresql.PostgresConnector
 import io.debezium.connector.postgresql.connection.Lsn
+import io.debezium.processors.reselect.ReselectColumnsPostProcessor
 import io.debezium.time.Conversions
 import io.github.oshai.kotlinlogging.KotlinLogging
 import jakarta.inject.Singleton
@@ -136,6 +137,7 @@ class PostgresSourceDebeziumOperations(
                     this.with("heartbeat.action.query", cdcConfig.heartbeatActionQuery!!)
                 }
             }
+            .withReselectColumns(cdcConfig.reselectColumns)
             .withHeartbeatTimeout(cdcConfig.airbyteHeartbeatTimeout)
     }
 
@@ -417,3 +419,28 @@ class PostgresSourceDebeziumOperations(
         return PostgresSourceCdcPosition(Lsn.valueOf(lsn), Lsn.valueOf(lsnCommit))
     }
 }
+
+/**
+ * Configures Debezium's [ReselectColumnsPostProcessor] for the given `schema.table:column` list.
+ *
+ * Postgres omits unchanged TOAST-ed column values from UPDATE events unless the table's replica
+ * identity is FULL, and Debezium then emits the `unavailable.value.placeholder` for them. The post
+ * processor re-reads only those columns from the source by primary key. Legitimately NULL columns
+ * are never re-selected, and a row that disappears between the event and the lookup is logged
+ * rather than failing the sync.
+ */
+internal fun DebeziumPropertiesBuilder.withReselectColumns(
+    reselectColumns: String?
+): DebeziumPropertiesBuilder = apply {
+    val includeList: String = reselectColumns?.trim().orEmpty()
+    if (includeList.isEmpty()) return@apply
+    with("post.processors", RESELECT_POST_PROCESSOR_NAME)
+    with("$RESELECT_POST_PROCESSOR_NAME.type", ReselectColumnsPostProcessor::class.java.name)
+    with("$RESELECT_POST_PROCESSOR_NAME.reselect.columns.include.list", includeList)
+    with("$RESELECT_POST_PROCESSOR_NAME.reselect.unavailable.values", "true")
+    with("$RESELECT_POST_PROCESSOR_NAME.reselect.null.values", "false")
+    with("$RESELECT_POST_PROCESSOR_NAME.reselect.use.event.key", "false")
+    with("$RESELECT_POST_PROCESSOR_NAME.reselect.error.handling.mode", "warn")
+}
+
+internal const val RESELECT_POST_PROCESSOR_NAME = "reselector"

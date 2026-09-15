@@ -99,6 +99,8 @@ data class CdcIncrementalConfiguration(
     val debeziumCommitsLsn: Boolean,
     val heartbeatActionQuery: String?,
     val airbyteHeartbeatTimeout: Duration,
+    /** Debezium reselect-columns include list, `schema.table:column`, or null/blank to disable. */
+    val reselectColumns: String? = null,
 // TODO: Support this configuration:
 //  initial waiting time in seconds
 //  size of the queue
@@ -241,6 +243,7 @@ constructor(
                     debeziumCommitsLsn = incrementalSpec.lsnCommitBehavior == "While reading Data",
                     heartbeatActionQuery = incrementalSpec.heartbeatActionQuery,
                     airbyteHeartbeatTimeout = initialWaitingDuration,
+                    reselectColumns = incrementalSpec.reselectColumns,
                 )
             }
         }
